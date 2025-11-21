@@ -1185,6 +1185,12 @@
                         <input type="number" id="oldRate" value="2.5" step="0.1" min="0" max="6" placeholder="宣告利率">
                         <div class="form-description">舊保單目前配息利率（保證+非保證）</div>
                     </div>
+
+                    <div class="form-group">
+                        <label class="form-label">舊保單預定利率 (%) <span class="badge badge-warning" style="font-size: 0.8em;">保證</span></label>
+                        <input type="number" id="oldGuaranteedRate" value="1.5" step="0.1" min="0" max="6" placeholder="預定利率">
+                        <div class="form-description">保單條款承諾的最低保證利率</div>
+                    </div>
                     
                     <div class="form-group">
                         <label class="form-label">舊保單年配息金額（萬元）</label>
@@ -1213,6 +1219,17 @@
                     </div>
                     <div class="form-description">推薦的新商品幣別（目前美元利率較高）</div>
                 </div>
+
+                <div class="form-group" id="exchangeRateGroup">
+                    <label class="form-label">
+                        匯率設定 (USD/NTD)
+                        <span class="tooltip">ℹ️
+                            <span class="tooltiptext">若涉及美元保單，請輸入預估匯率以進行換算比較。</span>
+                        </span>
+                    </label>
+                    <input type="number" id="exchangeRate" value="32.5" step="0.1" min="20" max="40" placeholder="匯率">
+                    <div class="form-description">用於將美元數值換算為台幣進行比較</div>
+                </div>
                 
                 <div class="form-grid">
                     <div class="form-group">
@@ -1237,6 +1254,12 @@
                         <input type="number" id="newRate" value="4.2" step="0.1" min="0" max="6" placeholder="宣告利率" onblur="validateInput(this, 0, 6, 'rate')">
                         <div class="error-message" id="error-newRate"></div>
                         <div class="form-description">新保單目前宣告利率（2024-2025年水平）</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">新保單預定利率 (%) <span class="badge badge-warning" style="font-size: 0.8em;">保證</span></label>
+                        <input type="number" id="newGuaranteedRate" value="2.5" step="0.1" min="0" max="6" placeholder="預定利率">
+                        <div class="form-description">新保單的最低保證利率（保守評估基準）</div>
                     </div>
                     
                     <div class="form-group">
@@ -1302,7 +1325,7 @@
             </button>
             
             <div class="company-info">
-                💡 <strong>數據依據：</strong>國泰金控2024年稅後淨利1,111.9億元，年成長116%，創歷史次高紀錄 [[3]]
+                💡 <strong>數據說明：</strong>本分析假設舊保單已滿期且無解約費用。新保單價值為預估值，實際數值請以建議書為準。
             </div>
         </div>
         
@@ -1633,77 +1656,130 @@
         function calculateCashValue() {
             const oldCashValueInput = parseFloat(document.getElementById('oldCashValueInput').value) || 150;
             const oldRate = parseFloat(document.getElementById('oldRate').value);
+            const oldGuaranteedRate = parseFloat(document.getElementById('oldGuaranteedRate').value) || 1.5;
+            
             const newPremium = parseFloat(document.getElementById('newPremium').value);
             const newRate = parseFloat(document.getElementById('newRate').value);
+            const newGuaranteedRate = parseFloat(document.getElementById('newGuaranteedRate').value) || 2.5;
+            
             const policyTerm = parseInt(document.getElementById('policyTerm').value);
             const clientAge = parseInt(document.getElementById('clientAge').value);
+            const exchangeRate = parseFloat(document.getElementById('exchangeRate').value) || 32.5;
             
-            // 自動計算舊保單年配息
+            // 匯率換算邏輯：統一換算成台幣(NTD)進行比較
+            let oldCashValueNTD = oldCashValueInput;
+            if (oldCurrency === 'USD') {
+                oldCashValueNTD = oldCashValueInput * exchangeRate;
+            }
+
+            let newPremiumNTD = newPremium;
+            if (newCurrency === 'USD') {
+                newPremiumNTD = newPremium * exchangeRate;
+            }
+
+            // 自動計算舊保單年配息 (顯示用，保持原幣別或標註)
             const calculatedOldPayout = oldCashValueInput * (oldRate / 100);
             document.getElementById('oldAnnualPayout').value = calculatedOldPayout.toFixed(2);
             
-            // 舊保單現金價值（直接使用輸入值）
-            const oldCashValue = oldCashValueInput;
+            // 舊保單現金價值（NTD）
+            const oldCashValue = oldCashValueNTD;
             
-            // 新保單現金價值
-            const newTotalPremium = newPremium * policyTerm;
-            let newCashValue;
+            // 新保單現金價值（NTD）
+            const newTotalPremiumNTD = newPremiumNTD * policyTerm;
             
-            if (policyTerm === 6) {
-                newCashValue = newTotalPremium * 1.083; // 6年期滿價值
-            } else if (policyTerm === 10) {
-                newCashValue = newTotalPremium * 1.25;
-            } else if (policyTerm === 15) {
-                newCashValue = newTotalPremium * 1.45;
-            } else {
-                newCashValue = newTotalPremium * 1.65;
-            }
+            // 計算新保單價值 (基於預定利率的保守估計)
+            // 使用複利公式：本金 * (1 + 預定利率)^年期
+            // 但需考慮前幾年的費用率，這裡做一個簡易的費用扣除模型
+            // 假設前6年費用較高，之後純複利
+            
+            let newCashValueNTD;
+            let newCashValueDeclaredNTD; // 宣告利率版本(參考用)
+
+            // 簡易模型：滿期時約等於 本金 * (1 + 預定利率 * 年期 * 0.8) -> 粗略估算扣費後
+            // 更精確一點：
+            // 6年期：第6年末約保本+一點利息 (視預定利率而定)
+            
+            // 基準因子 (假設預定利率2.0%時的滿期價值係數)
+            let baseFactor = 1.0;
+            if (policyTerm === 6) baseFactor = 1.05;
+            else if (policyTerm === 10) baseFactor = 1.15;
+            else if (policyTerm === 15) baseFactor = 1.35;
+            else baseFactor = 1.55;
+
+            // 根據實際預定利率調整
+            // 差異率
+            const rateDiff = (newGuaranteedRate - 2.0) / 100;
+            const adjustedFactor = baseFactor + (rateDiff * policyTerm);
+            
+            newCashValueNTD = newTotalPremiumNTD * adjustedFactor;
+
+            // 計算宣告利率版本 (用於比較)
+            const rateDiffDeclared = (newRate - 2.0) / 100;
+            const adjustedFactorDeclared = baseFactor + (rateDiffDeclared * policyTerm);
+            newCashValueDeclaredNTD = newTotalPremiumNTD * adjustedFactorDeclared;
             
             // 考慮年齡對保障倍數的影響
             const ageFactor = Math.max(1.0, 3.0 - (clientAge - 30) * 0.1);
             const actualCoverageMultiple = Math.min(parseFloat(document.getElementById('newCoverageMultiple').value), ageFactor);
             
             return {
-                oldCashValue,
-                newCashValue,
+                oldCashValue: oldCashValue, // NTD
+                newCashValue: newCashValueNTD, // NTD (Guaranteed)
+                newCashValueDeclared: newCashValueDeclaredNTD, // NTD (Declared)
                 oldIRR: oldRate.toFixed(2),
                 newIRR: newRate.toFixed(2),
+                oldGuaranteedIRR: oldGuaranteedRate.toFixed(2),
+                newGuaranteedIRR: newGuaranteedRate.toFixed(2),
                 ageFactor,
-                actualCoverageMultiple
+                actualCoverageMultiple,
+                newTotalPremiumNTD,
+                oldGuaranteedRate,
+                newGuaranteedRate
             };
         }
         
         function calculateReturns() {
             const newPremium = parseFloat(document.getElementById('newPremium').value);
             const newRate = parseFloat(document.getElementById('newRate').value);
+            const newGuaranteedRate = parseFloat(document.getElementById('newGuaranteedRate').value) || 2.5;
             const policyTerm = parseInt(document.getElementById('policyTerm').value);
+            const exchangeRate = parseFloat(document.getElementById('exchangeRate').value) || 32.5;
             
-            const newTotalPremium = newPremium * policyTerm;
-            let annualPayout;
+            let newPremiumNTD = newPremium;
+            if (newCurrency === 'USD') {
+                newPremiumNTD = newPremium * exchangeRate;
+            }
+
+            const newTotalPremiumNTD = newPremiumNTD * policyTerm;
+            let annualPayoutNTD;
+            
+            // 使用預定利率計算保證配息 (若有)
+            // 這裡假設年配息是基於宣告利率，但我們也提供一個保證配息的參考
+            // 為了符合用戶「以預定利率為基準」的要求，這裡主要顯示保證配息
             
             if (payoutMethod === 'annual') {
-                // 年配息金額（台幣萬元）
-                annualPayout = newTotalPremium * (newRate / 100);
+                // 年配息金額（台幣萬元）- 使用預定利率計算保證配息
+                annualPayoutNTD = newTotalPremiumNTD * (newGuaranteedRate / 100);
             } else {
-                annualPayout = 0;
+                annualPayoutNTD = 0;
             }
             
-            // 10年總報酬（假設利率維持）
-            const return10yr = newTotalPremium * Math.pow(1 + newRate/100, 10);
-            const return20yr = newTotalPremium * Math.pow(1 + newRate/100, 20);
+            // 10年總報酬（使用預定利率計算保證價值）
+            const return10yr = newTotalPremiumNTD * Math.pow(1 + newGuaranteedRate/100, 10);
+            const return20yr = newTotalPremiumNTD * Math.pow(1 + newGuaranteedRate/100, 20);
             
-            // 回收年限（簡化計算）
-            const paybackPeriod = newTotalPremium / (newTotalPremium * newRate/100);
+            // 回收年限（簡化計算，基於預定利率）
+            const paybackPeriod = newTotalPremiumNTD / (newTotalPremiumNTD * newGuaranteedRate/100);
             
             return {
-                annualPayout,
+                annualPayout: annualPayoutNTD, // NTD (Guaranteed)
                 totalReturn10yr: return10yr,
                 totalReturn20yr: return20yr,
                 paybackPeriod: paybackPeriod.toFixed(1)
             };
         }
         
-        function calculateAll() {
+        function calculateAll(autoSwitch = true) {
             // 顯示loading效果
             const btn = document.querySelector('.btn');
             const originalText = btn.innerHTML;
@@ -1750,7 +1826,7 @@
                 btn.classList.remove('animation-bounce');
                 
                 // 切換到結果頁面
-                if (document.querySelector('.tabs .tab.active').textContent.includes('參數')) {
+                if (autoSwitch && document.querySelector('.tabs .tab.active').textContent.includes('參數')) {
                     switchTab(2);
                 }
             }, 800);
@@ -1769,6 +1845,37 @@
                 returnChartInstance.destroy();
             }
             
+            // 重新計算數據以獲取最新值
+            const cashValueData = calculateCashValue();
+            const oldVal = cashValueData.oldCashValue;
+            const newVal = cashValueData.newCashValue; // Guaranteed
+            const newValDeclared = cashValueData.newCashValueDeclared; // Declared
+            const totalPrem = cashValueData.newTotalPremiumNTD;
+            const oldGuaranteedRate = cashValueData.oldGuaranteedRate;
+            const newGuaranteedRate = cashValueData.newGuaranteedRate;
+
+            // 模擬新保單現金價值成長曲線 (更真實的曲線：前低後高)
+            // 使用預定利率計算保證價值曲線
+            const newPolicyCurve = [
+                totalPrem * 0.3,  // 目前
+                totalPrem * 0.92, // 5年後 (保證價值通常較低)
+                newVal * 1.0,     // 10年後 (基準點)
+                newVal * Math.pow(1 + newGuaranteedRate/100, 5),    // 15年後
+                newVal * Math.pow(1 + newGuaranteedRate/100, 10)    // 20年後
+            ];
+
+            // 舊保單 (已滿期，穩定成長，使用預定利率計算保證價值)
+            const oldPolicyCurve = [
+                oldVal,
+                oldVal * Math.pow(1 + oldGuaranteedRate/100, 5),
+                oldVal * Math.pow(1 + oldGuaranteedRate/100, 10),
+                oldVal * Math.pow(1 + oldGuaranteedRate/100, 15),
+                oldVal * Math.pow(1 + oldGuaranteedRate/100, 20)
+            ];
+
+            // 本金線 (總繳保費)
+            const principalLine = Array(5).fill(totalPrem);
+
             // 現金價值圖表
             const ctx1 = document.getElementById('cashValueChart').getContext('2d');
             cashValueChartInstance = new Chart(ctx1, {
@@ -1777,20 +1884,33 @@
                     labels: ['目前', '5年後', '10年後', '15年後', '20年後'],
                     datasets: [
                         {
-                            label: '舊保單現金價值 (萬)',
-                            data: [150, 169, 192, 217, 246],
-                            backgroundColor: 'rgba(102, 126, 234, 0.7)',
+                            label: '舊保單保證價值 (NTD)',
+                            data: oldPolicyCurve.map(v => Math.round(v)),
+                            backgroundColor: 'rgba(102, 126, 234, 0.8)',
                             borderColor: 'rgba(102, 126, 234, 1)',
-                            borderWidth: 2,
-                            borderRadius: 8
+                            borderWidth: 1,
+                            borderRadius: 4,
+                            order: 2
                         },
                         {
-                            label: '新保單現金價值 (萬)',
-                            data: [0, 28.5, 47.8, 63.2, 71.2],
-                            backgroundColor: 'rgba(79, 172, 254, 0.7)',
+                            label: '新保單保證價值 (NTD)',
+                            data: newPolicyCurve.map(v => Math.round(v)),
+                            backgroundColor: 'rgba(79, 172, 254, 0.8)',
                             borderColor: 'rgba(79, 172, 254, 1)',
+                            borderWidth: 1,
+                            borderRadius: 4,
+                            order: 3
+                        },
+                        {
+                            type: 'line',
+                            label: '新保單總繳本金',
+                            data: principalLine.map(v => Math.round(v)),
+                            borderColor: '#ff6b6b',
                             borderWidth: 2,
-                            borderRadius: 8
+                            borderDash: [5, 5],
+                            pointStyle: 'line',
+                            fill: false,
+                            order: 1
                         }
                     ]
                 },
@@ -1800,35 +1920,33 @@
                     plugins: {
                         title: {
                             display: true,
-                            text: '現金價值成長比較 (單位：萬)',
+                            text: `現金價值成長比較 (基於預定利率: 舊${oldGuaranteedRate}% vs 新${newGuaranteedRate}%)`,
                             font: {
                                 size: 16,
                                 weight: 'bold'
                             }
                         },
-                        legend: {
-                            position: 'top',
-                        },
                         tooltip: {
-                            mode: 'index',
-                            intersect: false,
                             callbacks: {
                                 label: function(context) {
-                                    return `${context.dataset.label}: ${context.raw.toFixed(1)}萬`;
+                                    return context.dataset.label + ': ' + context.raw + ' 萬';
                                 }
+                            }
+                        },
+                        subtitle: {
+                            display: true,
+                            text: '註：圖表顯示數值為「保證收益」，實際宣告利率可能帶來更高收益',
+                            padding: {
+                                bottom: 10
                             }
                         }
                     },
                     scales: {
                         y: {
                             beginAtZero: true,
-                            grid: {
-                                color: 'rgba(0, 0, 0, 0.1)'
-                            }
-                        },
-                        x: {
-                            grid: {
-                                display: false
+                            title: {
+                                display: true,
+                                text: '金額 (萬元)'
                             }
                         }
                     }
@@ -2092,7 +2210,7 @@
             }
             
             // 首次計算
-            setTimeout(calculateAll, 500);
+            setTimeout(() => calculateAll(false), 500);
             
             // 添加自動計算年配息的事件監聽器
             document.getElementById('oldCashValueInput').addEventListener('input', updateOldPayout);
